@@ -2,7 +2,7 @@ module WsApi.IncomingMessages exposing (ParsedMessage(..), Start(..), messageDec
 
 import Json.Decode as Decode exposing (Decoder)
 import Models.Role exposing (Role, roleDecoder)
-import Models.SST exposing (SST, sstDecoder)
+import Models.SST exposing (SST(..), sstDecoder)
 import Models.SharingEntity exposing (SharingEntity, sharingEntityDecoder)
 
 
@@ -32,7 +32,8 @@ configMsgDecoder =
 
 
 type Start
-    = StartAck Bool
+    = StartAckVNC Bool
+    | StartAckWebRTC
     | StartError
 
 
@@ -40,8 +41,17 @@ decodeAnswer : String -> Decoder Start
 decodeAnswer answer =
     case answer of
         "acknowledge" ->
-            Decode.field "isMobile" Decode.bool
-                |> Decode.map StartAck
+            Decode.field "technology" sstDecoder
+                |> Decode.andThen
+                    (\tech ->
+                        case tech of
+                            VNC ->
+                                Decode.field "isMobile" Decode.bool
+                                    |> Decode.map StartAckVNC
+
+                            WebRTC ->
+                                Decode.succeed StartAckWebRTC
+                    )
 
         "error" ->
             Decode.succeed StartError

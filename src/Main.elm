@@ -2,7 +2,6 @@ module Main exposing (main)
 
 import Bootstrap.Button as Button
 import Bootstrap.Modal as Modal
-import Bootstrap.Tab as Tab
 import Browser
 import Html exposing (Html, button, div, text)
 import Html.Events exposing (onClick)
@@ -10,11 +9,10 @@ import Interop.Ports exposing (listen, receive, send)
 import Json.Decode as Decode
 import List.Zipper as Zipper exposing (Zipper)
 import Models.Role exposing (Role(..))
-import Models.SST exposing (SST(..))
+import Models.SST exposing (SST(..), sstToString)
 import Models.SharingEntity exposing (SharingEntity)
 import Task exposing (perform)
-import Ui.EntitySelector
-import Utils.Html exposing (viewNothing)
+import Ui.SharingScreen exposing (SharingMode(..))
 import WsApi.IncomingMessages exposing (ParsedMessage(..), Start(..), messageDecoder)
 import WsApi.OutcomingMessages exposing (OutcomingMessage(..), messageToString)
 
@@ -33,32 +31,37 @@ main =
         }
 
 
-type alias Model =
-    { role : Maybe Role
-    , technologies : Maybe (Zipper SST)
-    , isMobile : Maybe Bool
-    , entitySelector : Maybe Ui.EntitySelector.Model
-    , displayError : Maybe String
+type alias WaitingForAcknowledgementModel =
+    { currentAttempt : Zipper SST
+    , previousAttempt : Maybe SST
     }
 
 
+type PresenterModel
+    = WaitingForPreferences
+    | ReadyToStart (Zipper SST)
+    | WaitingForAcknowledgement WaitingForAcknowledgementModel
+    | WaitingForSharingEntites SST
+    | Sharing Ui.SharingScreen.Model
+
+
+type Model
+    = Initial
+    | Participaint
+    | Presenter PresenterModel
+    | Error String
+
+
 type Msg
-    = EntitySelectorMsg Ui.EntitySelector.Msg
-    | GotWsMessage (Result Decode.Error ParsedMessage)
+    = GotWsMessage (Result Decode.Error ParsedMessage)
     | SendWsMessage OutcomingMessage
+    | SharingScreenMsg Ui.SharingScreen.Msg
     | DoNothing
 
 
 init : Flags -> ( Model, Cmd Msg )
 init hostUrl =
-    ( { role = Nothing
-      , technologies = Nothing
-      , isMobile = Nothing
-      , entitySelector = Nothing
-      , displayError = Nothing
-      }
-    , listen hostUrl
-    )
+    ( Initial, listen hostUrl )
 
 
 wrapSst : Zipper SST -> Msg
@@ -71,56 +74,96 @@ askSst list =
     perform (always (wrapSst list)) (Task.succeed ())
 
 
-requestNextSstOrShowError : Model -> ( Model, Cmd Msg )
-requestNextSstOrShowError model =
-    case model.technologies of
-        Nothing ->
-            ( model, Cmd.none )
-
-        Just tech ->
-            case Zipper.next tech of
-                Nothing ->
-                    ( { model | technologies = Nothing, displayError = Just "Server is unavailable at the moment" }, Cmd.none )
-
-                Just list ->
-                    ( model, askSst list )
-
-
-updateEntitySelector : Ui.EntitySelector.Msg -> Model -> ( Model, Cmd Msg )
-updateEntitySelector msg model =
-    case model.entitySelector of
-        Nothing ->
-            ( model, Cmd.none )
-
-        Just entitySelectorModel ->
-            Ui.EntitySelector.update msg entitySelectorModel
-                |> (\( esModel, esMsg ) -> ( { model | entitySelector = Just esModel }, Cmd.map EntitySelectorMsg esMsg ))
-
-
-updateOnStartAnswer : Start -> Model -> ( Model, Cmd Msg )
-updateOnStartAnswer start model =
-    case start of
-        StartAck isMobile ->
-            ( { model | isMobile = Just isMobile }, Cmd.none )
-
-        StartError ->
-            requestNextSstOrShowError model
-
-
 updateOnWsMessage : ParsedMessage -> Model -> ( Model, Cmd Msg )
 updateOnWsMessage message model =
     case message of
         RoleMsg role ->
-            ( { model | role = Just role }, Cmd.none )
+            case role of
+                ParticipantRole ->
+                    ( Participaint, Cmd.none )
+
+                PresenterRole ->
+                    ( Presenter WaitingForPreferences, Cmd.none )
 
         PreferencesMsg technologies ->
-            ( { model | technologies = Zipper.fromList technologies }, Cmd.none )
+            let
+                tech =
+                    Zipper.fromList technologies
+            in
+            case tech of
+                Nothing ->
+                    ( Error "Got empty list of available screen sharing technologies", Cmd.none )
+
+                Just t ->
+                    ( Presenter <| ReadyToStart t, Cmd.none )
 
         StartAnswer answer ->
-            updateOnStartAnswer answer model
+            case model of
+                Presenter presenterModel ->
+                    case presenterModel of
+                        WaitingForAcknowledgement waitingForAckModel ->
+                            case answer of
+                                StartAckVNC isMobile ->
+                                    if isMobile then
+                                        ( Presenter <| Sharing <| Ui.SharingScreen.initialModel VNCMobileSharing, Cmd.none )
+
+                                    else
+                                        ( Presenter <| WaitingForSharingEntites VNC, Cmd.none )
+
+                                StartAckWebRTC ->
+                                    ( Presenter <| WaitingForSharingEntites WebRTC, Cmd.none )
+
+                                StartError ->
+                                    let
+                                        nextSst =
+                                            Zipper.next waitingForAckModel.currentAttempt
+                                    in
+                                    case nextSst of
+                                        Nothing ->
+                                            ( Error "No sharing technologies are available at the moment", Cmd.none )
+
+                                        Just zipperSst ->
+                                            ( Presenter <| WaitingForAcknowledgement <| WaitingForAcknowledgementModel zipperSst (Just (Zipper.current waitingForAckModel.currentAttempt)), askSst zipperSst )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
 
         ConfigMsg entities ->
-            ( { model | entitySelector = Just <| Ui.EntitySelector.Model entities Modal.hidden Tab.initialState Nothing }, Cmd.none )
+            case model of
+                Presenter presenterModel ->
+                    case presenterModel of
+                        WaitingForSharingEntites selectedSst ->
+                            case selectedSst of
+                                VNC ->
+                                    ( Presenter <| Sharing <| Ui.SharingScreen.initialModel <| (VNCDesktopSharing <| Ui.SharingScreen.initialSharingModeModel entities), Cmd.none )
+
+                                WebRTC ->
+                                    ( Presenter <| Sharing <| Ui.SharingScreen.initialModel <| (WebRTCSharing <| Ui.SharingScreen.initialSharingModeModel entities), Cmd.none )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+
+updateSharingScreen : Ui.SharingScreen.Msg -> Model -> ( Model, Cmd Msg )
+updateSharingScreen msg model =
+    case model of
+        Presenter presModel ->
+            case presModel of
+                Sharing screenModel ->
+                    Ui.SharingScreen.update msg screenModel
+                        |> (\( sharingModel, sharingCmd ) -> ( Presenter <| Sharing sharingModel, sharingCmd |> Cmd.map SharingScreenMsg ))
+
+                _ ->
+                    ( model, Cmd.none )
+
+        _ ->
+            ( model, Cmd.none )
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -129,16 +172,26 @@ update msg model =
         DoNothing ->
             ( model, Cmd.none )
 
-        EntitySelectorMsg entitySelectorMsg ->
-            updateEntitySelector entitySelectorMsg model
+        SharingScreenMsg sharingModeMsg ->
+            updateSharingScreen sharingModeMsg model
 
         SendWsMessage message ->
-            ( model, send <| messageToString message )
+            case ( message, model ) of
+                ( StartOM _, Presenter presenterModel ) ->
+                    case presenterModel of
+                        ReadyToStart sstlist ->
+                            ( Presenter <| WaitingForAcknowledgement <| WaitingForAcknowledgementModel sstlist Nothing, send <| messageToString message )
+
+                        _ ->
+                            ( model, send <| messageToString message )
+
+                _ ->
+                    ( model, send <| messageToString message )
 
         GotWsMessage result ->
             case result of
                 Err err ->
-                    ( { model | displayError = Just (Decode.errorToString err) }, Cmd.none )
+                    ( Error <| Decode.errorToString err, Cmd.none )
 
                 Ok message ->
                     updateOnWsMessage message model
@@ -146,16 +199,6 @@ update msg model =
 
 
 -- VIEW
-
-
-viewEntitySelector : Maybe Ui.EntitySelector.Model -> Html Msg
-viewEntitySelector model =
-    case model of
-        Just esModel ->
-            Html.map EntitySelectorMsg (Ui.EntitySelector.view esModel)
-
-        Nothing ->
-            viewNothing
 
 
 viewError : String -> Html Msg
@@ -170,67 +213,61 @@ viewError error =
         |> Modal.view Modal.shown
 
 
-viewLoading : Html Msg
-viewLoading =
-    Html.text "Loading..."
-
-
 viewParticipant : Html Msg
 viewParticipant =
     Html.text "Waiting for sharing to start"
 
 
-viewPresenter : Model -> Html Msg
+viewPresenter : PresenterModel -> Html Msg
 viewPresenter model =
-    case model.technologies of
-        Nothing ->
+    case model of
+        WaitingForPreferences ->
             Html.text "Waiting for list of supported technologies"
 
-        Just technologies ->
-            case model.isMobile of
-                Nothing ->
-                    div []
-                        [ Button.button
-                            [ Button.outlineSuccess
-                            , Button.attrs [ onClick <| wrapSst technologies ]
-                            ]
-                            [ text "Start" ]
-                        ]
+        ReadyToStart technologies ->
+            div []
+                [ Button.button
+                    [ Button.outlineSuccess
+                    , Button.attrs [ onClick <| wrapSst technologies ]
+                    ]
+                    [ text "Start" ]
+                ]
 
-                Just isMobile ->
-                    case model.entitySelector of
-                        Nothing ->
-                            div [] [ text "Waiting for list of available entities to share" ]
+        WaitingForAcknowledgement waitingForAckModel ->
+            let
+                prevAttemptFailedText =
+                    waitingForAckModel.previousAttempt
+                        |> Maybe.map sstToString
+                        |> Maybe.map (\sst -> "Server refused to use " ++ sst ++ ". ")
+                        |> Maybe.withDefault ""
 
-                        Just selector ->
-                            div []
-                                [ Button.button
-                                    [ Button.outlineSuccess
-                                    , Button.attrs [ onClick <| EntitySelectorMsg Ui.EntitySelector.OpenModal ]
-                                    ]
-                                    [ text "Show screens/windows" ]
-                                , viewEntitySelector model.entitySelector
-                                ]
+                currentTechnology =
+                    sstToString <| Zipper.current waitingForAckModel.currentAttempt
+            in
+            Html.text <| prevAttemptFailedText ++ "Attempting to connect via " ++ currentTechnology
+
+        WaitingForSharingEntites _ ->
+            Html.text "Waiting for list of what to share"
+
+        Sharing sharingModel ->
+            Ui.SharingScreen.view sharingModel
+                |> Html.map SharingScreenMsg
 
 
 view : Model -> Html Msg
 view model =
-    case model.displayError of
-        Just error ->
-            viewError error
+    case model of
+        Initial ->
+            Html.text "Waiting for role"
 
-        Nothing ->
-            case model.role of
-                Nothing ->
-                    viewLoading
+        Participaint ->
+            viewParticipant
 
-                Just role ->
-                    case role of
-                        Participant ->
-                            viewParticipant
+        Presenter presenterModel ->
+            viewPresenter presenterModel
 
-                        Presenter ->
-                            viewPresenter model
+        Error message ->
+            viewError message
 
 
 

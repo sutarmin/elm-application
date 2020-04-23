@@ -1,4 +1,4 @@
-module Ui.EntitySelector exposing (Model, Msg(..), entityTypeTabs, update, view)
+module Ui.EntitySelector exposing (Msg(..), entityTypeTabs, tabIds, view)
 
 import Bootstrap.Button as Button
 import Bootstrap.ListGroup as ListGroup
@@ -8,14 +8,6 @@ import Bootstrap.Utilities.Spacing as Spacing
 import Html exposing (Html, text)
 import Html.Events exposing (onClick)
 import Models.SharingEntity exposing (SharingEntity, eqMaybeSharingEntity, isScreen, isWindow)
-
-
-type alias Model =
-    { entities : List SharingEntity
-    , visibility : Modal.Visibility
-    , activeTab : Tab.State
-    , selectedEntity : Maybe SharingEntity
-    }
 
 
 type alias EntityTypeTabInfo =
@@ -31,10 +23,16 @@ type alias EntityTypeTab =
     }
 
 
+tabIds =
+    { windows = "windows"
+    , screens = "screens"
+    }
+
+
 entityTypeTabs : List EntityTypeTabInfo
 entityTypeTabs =
-    [ EntityTypeTabInfo "windows" "Windows" isWindow
-    , EntityTypeTabInfo "screens" "Screens" isScreen
+    [ EntityTypeTabInfo tabIds.windows "Windows" isWindow
+    , EntityTypeTabInfo tabIds.screens "Screens" isScreen
     ]
 
 
@@ -52,24 +50,8 @@ splitEntites entities =
 type Msg
     = ChangeTab Tab.State
     | CloseModal
-    | OpenModal
+    | OpenModal Tab.State
     | SelectEntity SharingEntity
-
-
-update : Msg -> Model -> ( Model, Cmd Msg )
-update msg model =
-    case msg of
-        ChangeTab tab ->
-            ( { model | activeTab = tab }, Cmd.none )
-
-        OpenModal ->
-            ( { model | visibility = Modal.shown }, Cmd.none )
-
-        CloseModal ->
-            ( { model | visibility = Modal.hidden }, Cmd.none )
-
-        SelectEntity entity ->
-            ( { model | selectedEntity = Just entity, visibility = Modal.hidden }, Cmd.none )
 
 
 
@@ -109,11 +91,11 @@ viewTab selectedEntity tab =
         }
 
 
-view : Model -> Html Msg
-view model =
+view : List SharingEntity -> Maybe SharingEntity -> Tab.State -> Modal.Visibility -> Html Msg
+view entities selectedEntity tab visibility =
     let
         tabs =
-            splitEntites model.entities
+            splitEntites entities
     in
     Modal.config CloseModal
         |> Modal.small
@@ -121,8 +103,8 @@ view model =
         |> Modal.h3 [] [ text "Modal header" ]
         |> Modal.body []
             [ Tab.config ChangeTab
-                |> Tab.items (List.map (viewTab model.selectedEntity) tabs)
-                |> Tab.view model.activeTab
+                |> Tab.items (List.map (viewTab selectedEntity) tabs)
+                |> Tab.view tab
             ]
         |> Modal.footer []
             [ Button.button
@@ -131,4 +113,4 @@ view model =
                 ]
                 [ text "Close" ]
             ]
-        |> Modal.view model.visibility
+        |> Modal.view visibility

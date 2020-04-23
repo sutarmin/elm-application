@@ -1,4 +1,4 @@
-module Models.SST exposing (SST, parseSst, sstDecoder, sstToString)
+module Models.SST exposing (SST(..), parseSst, sstDecoder, sstToString)
 
 -- SST stands for Screen Sharing Technology
 

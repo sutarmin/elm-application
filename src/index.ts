@@ -1,5 +1,9 @@
 import { Elm } from "./Main";
-import { presenterScenario } from "./test";
+import {
+  presenterScenarioWebRTC,
+  presenterScenarioVNC,
+  presenterScenarioVNCMobile,
+} from "./test";
 
 const app = Elm.Main.init({
   node: document.querySelector("main"),
@@ -8,7 +12,7 @@ const app = Elm.Main.init({
 
 app.ports.listen.subscribe(async (url) => {
   console.log(`Connected to ${url}`);
-  await presenterScenario(app);
+  await presenterScenarioVNCMobile(app);
 });
 
 /*

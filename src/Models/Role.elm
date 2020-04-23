@@ -4,8 +4,8 @@ import Json.Decode as Decode exposing (Decoder)
 
 
 type Role
-    = Presenter
-    | Participant
+    = PresenterRole
+    | ParticipantRole
 
 
 roleDecoder : Decoder Role
@@ -17,10 +17,10 @@ parseRole : String -> Decoder Role
 parseRole str =
     case str of
         "presenter" ->
-            Decode.succeed Presenter
+            Decode.succeed PresenterRole
 
         "participant" ->
-            Decode.succeed Participant
+            Decode.succeed ParticipantRole
 
         _ ->
             Decode.fail "Failed to parse role"
